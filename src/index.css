@@ -1,0 +1,179 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  
+  /* Color Palette - Vibrant Dark Mode */
+  --bg-app: #08090d;
+  --bg-card: rgba(20, 22, 33, 0.75);
+  --bg-card-border: rgba(255, 255, 255, 0.08);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  
+  --primary: #6366f1; /* Indigo */
+  --primary-hover: #4f46e5;
+  --primary-glow: rgba(99, 102, 241, 0.2);
+  
+  --success: #10b981; /* Emerald */
+  --success-glow: rgba(16, 185, 129, 0.2);
+  
+  --danger: #ef4444; /* Rose */
+  --danger-glow: rgba(239, 68, 68, 0.2);
+  
+  --accent: #f43f5e;
+  
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-full: 9999px;
+  
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  min-height: 100dvh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Glassmorphism Panels */
+.glass-panel {
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--bg-card-border);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Transitions */
+button, input, a {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Leaflet map styles */
+.leaflet-container {
+  background-color: #0b0c10 !important;
+  width: 100%;
+  height: 100%;
+}
+
+.leaflet-bar {
+  border: 1px solid var(--bg-card-border) !important;
+  box-shadow: var(--shadow-md) !important;
+  border-radius: var(--radius-sm) !important;
+  overflow: hidden;
+}
+
+.leaflet-bar a {
+  background-color: rgba(20, 22, 33, 0.9) !important;
+  color: var(--text-primary) !important;
+  border-bottom: 1px solid var(--bg-card-border) !important;
+}
+
+.leaflet-bar a:hover {
+  background-color: var(--primary) !important;
+  color: white !important;
+}
+
+.leaflet-control-attribution {
+  font-size: 8px !important;
+  background: rgba(0,0,0,0.6) !important;
+  color: var(--text-muted) !important;
+}
+
+/* Main App Layout */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: 480px;
+  margin: 0 auto;
+  position: relative;
+  background-color: #06070a;
+  border-left: 1px solid rgba(255, 255, 255, 0.03);
+  border-right: 1px solid rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+
+/* Glowing GPS Current Location Marker */
+.gps-marker {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gps-marker-dot {
+  width: 12px;
+  height: 12px;
+  background-color: var(--primary);
+  border: 2.5px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 10px var(--primary);
+  z-index: 2;
+}
+
+.gps-marker-pulse {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  background-color: var(--primary-glow);
+  border-radius: 50%;
+  animation: gps-pulse 2s infinite ease-out;
+  z-index: 1;
+}
+
+@keyframes gps-pulse {
+  0% {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+/* Route Start/End Pins */
+.route-pin {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+}
+
+.start-pin {
+  background-color: var(--success);
+  border: 2px solid #ffffff;
+}
+
+.end-pin {
+  background-color: var(--danger);
+  border: 2px solid #ffffff;
+}
+
+.pin-dot {
+  width: 4px;
+  height: 4px;
+  background-color: #ffffff;
+  border-radius: 50%;
+}
+
