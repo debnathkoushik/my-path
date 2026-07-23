@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Play, Square, Navigation, AlertCircle, RefreshCw } from 'lucide-react';
 import Map from '../components/Map';
 import RecordingStats from '../components/RecordingStats';
@@ -14,7 +14,8 @@ export default function TrackerView() {
     path,
     isRecording,
     error: geoError,
-    permissionGranted,
+    isMockEnabled,
+    toggleMockMode,
     initLocation,
     startRecording,
     stopRecording,
@@ -23,7 +24,6 @@ export default function TrackerView() {
 
   const {
     elapsedTime,
-    isActive: timerActive,
     startTimer,
     stopTimer,
     resetTimer
@@ -160,11 +160,37 @@ export default function TrackerView() {
           </h1>
         </div>
 
-        {/* GPS Indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        {/* GPS Indicator & Simulator Switch */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* Mock GPS Toggle Button */}
+          <button
+            onClick={toggleMockMode}
+            disabled={isRecording}
+            className="glass-panel"
+            style={{
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-full)',
+              fontSize: '10px',
+              fontWeight: '600',
+              color: isMockEnabled ? 'var(--primary)' : 'var(--text-secondary)',
+              border: `1px solid ${isMockEnabled ? 'rgba(99, 102, 241, 0.4)' : 'var(--bg-card-border)'}`,
+              backgroundColor: isMockEnabled ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+              cursor: isRecording ? 'not-allowed' : 'pointer',
+              opacity: isRecording ? 0.6 : 1,
+              transition: 'all 0.2s ease',
+              letterSpacing: '0.02em',
+              textTransform: 'uppercase'
+            }}
+            title={isRecording ? "Cannot toggle simulation while tracking" : "Toggle Mock GPS Simulator for laptop testing"}
+          >
+            {isMockEnabled ? '🤖 Simulating' : '🔌 Use Simulator'}
+          </button>
+
+          <div style={{ width: '1px', height: '14px', backgroundColor: 'rgba(255, 255, 255, 0.15)' }} />
+
           {currentLocation ? (
-            <span style={{ fontSize: '10px', color: 'var(--success)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              GPS Active ({Math.round(currentLocation.accuracy)}m)
+            <span style={{ fontSize: '10px', color: isMockEnabled ? 'var(--primary)' : 'var(--success)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {isMockEnabled ? 'Sim Active' : `GPS Active (${Math.round(currentLocation.accuracy)}m)`}
             </span>
           ) : (
             <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '500' }}>

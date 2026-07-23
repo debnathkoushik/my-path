@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Loader2, AlertCircle, Plus, Calendar, Compass, Timer, Activity } from 'lucide-react';
 import Map from '../components/Map';
 import ShareButton from '../components/ShareButton';
