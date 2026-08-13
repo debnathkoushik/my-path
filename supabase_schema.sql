@@ -1,6 +1,10 @@
 -- Run this in the Supabase SQL editor to initialize route sharing.
 -- It is safe to run more than once.
 
+-- Required for gen_random_uuid() on Supabase/Postgres projects where pgcrypto
+-- has not already been enabled.
+create extension if not exists pgcrypto with schema extensions;
+
 -- Create the routes table to store GPS coordinates and metadata.
 create table if not exists public.routes (
   id uuid default gen_random_uuid() primary key,
@@ -36,3 +40,14 @@ with check (true);
 
 -- Tell Supabase's REST API to refresh its schema cache immediately.
 notify pgrst, 'reload schema';
+
+-- Make the SQL editor fail loudly if the table was not created.
+do $$
+begin
+  if to_regclass('public.routes') is null then
+    raise exception 'public.routes was not created. Check the earlier SQL editor error output.';
+  end if;
+end
+$$;
+
+select to_regclass('public.routes') as created_table;
