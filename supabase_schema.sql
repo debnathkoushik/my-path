@@ -1,4 +1,7 @@
--- Create the routes table to store GPS coordinates and metadata
+-- Run this in the Supabase SQL editor to initialize route sharing.
+-- It is safe to run more than once.
+
+-- Create the routes table to store GPS coordinates and metadata.
 create table if not exists public.routes (
   id uuid default gen_random_uuid() primary key,
   name text not null,
@@ -8,17 +11,28 @@ create table if not exists public.routes (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
--- Enable Row Level Security (RLS)
+-- Allow the browser client roles to access the table through Supabase's API.
+grant usage on schema public to anon, authenticated;
+grant select, insert on table public.routes to anon, authenticated;
+
+-- Enable Row Level Security (RLS).
 alter table public.routes enable row level security;
 
--- Create a policy to allow anyone to read route paths by ID (no auth required)
+-- Recreate policies so rerunning this file keeps the expected behavior.
+drop policy if exists "Allow public read access to routes" on public.routes;
+drop policy if exists "Allow public insert access to routes" on public.routes;
+
+-- Create a policy to allow anyone to read route paths by ID (no auth required).
 create policy "Allow public read access to routes"
 on public.routes for select
-to public
+to anon, authenticated
 using (true);
 
--- Create a policy to allow anyone to save route paths (no auth required)
+-- Create a policy to allow anyone to save route paths (no auth required).
 create policy "Allow public insert access to routes"
 on public.routes for insert
-to public
+to anon, authenticated
 with check (true);
+
+-- Tell Supabase's REST API to refresh its schema cache immediately.
+notify pgrst, 'reload schema';
