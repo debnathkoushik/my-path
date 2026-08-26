@@ -9,18 +9,23 @@ This project uses Supabase CLI migrations as the source of truth for database sc
 - `.github/workflows/deploy.yml`: Production deployment workflow. It applies pending Supabase migrations before deploying to Vercel.
 - `supabase_schema.sql`: Deprecated reference file. Do not run it during deployment.
 
-## Required Secrets
+## Required GitHub Values
 
 Create these as GitHub Actions secrets in the `production` environment:
 
 - `SUPABASE_ACCESS_TOKEN`: Supabase personal access token for the CLI.
-- `SUPABASE_PROJECT_ID`: Production Supabase project ref, for example the `<project-ref>` in `https://<project-ref>.supabase.co`.
 - `SUPABASE_DB_PASSWORD`: Production database password.
 - `VERCEL_TOKEN`: Vercel token with access to this project.
+
+Create these as GitHub Actions variables in the `production` environment:
+
+- `SUPABASE_PROJECT_ID`: Production Supabase project ref, for example the `<project-ref>` in `https://<project-ref>.supabase.co`.
 - `VERCEL_ORG_ID`: Vercel team/user ID.
 - `VERCEL_PROJECT_ID`: Vercel project ID.
+- `VITE_SUPABASE_URL`: Production Supabase URL injected into the Vite build.
+- `VITE_SUPABASE_PUBLISHABLE_KEY`: Production Supabase publishable key injected into the Vite build.
 
-Keep Vite runtime variables such as `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in Vercel's dashboard environment variables.
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` are browser-exposed Vite build variables. They are not private once deployed, but they still must be configured in GitHub Actions because the production build runs in the GitHub runner before the prebuilt output is uploaded to Vercel.
 
 ## Production Flow
 
