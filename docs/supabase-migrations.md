@@ -40,6 +40,8 @@ Create these as GitHub Actions variables in the `production` environment:
 
 Disable Vercel's automatic Git deployments for this project when using this workflow. Otherwise Vercel can start a deployment directly from the Git push before the migration job finishes.
 
+The deploy job creates `.vercel/project.json` during CI from `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`. If Vercel reports that it cannot retrieve project settings, verify that those production environment variables are present, that `VERCEL_PROJECT_ID` starts with `prj_`, and that `VERCEL_ORG_ID` is the owning `team_` or `user_` ID for that project.
+
 ## Local Development
 
 Install the Supabase CLI and make sure Docker is running.
