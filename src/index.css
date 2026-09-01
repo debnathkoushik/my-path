@@ -70,6 +70,11 @@ button, input, a {
   height: 100%;
 }
 
+/* Fallback dark filter for standard OSM tiles when CARTO API key is missing */
+.dark-tiles-fallback .leaflet-tile {
+  filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3);
+}
+
 .leaflet-bar {
   border: 1px solid var(--bg-card-border) !important;
   box-shadow: var(--shadow-md) !important;
