@@ -177,3 +177,77 @@ button, input, a {
   border-radius: 50%;
 }
 
+/* ── Nearby Places (POI) Markers ──────────────────────────────────────────── */
+
+/* Outer wrapper — zero size so Leaflet's iconAnchor centres it precisely */
+.custom-leaflet-poi-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+.poi-marker {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.poi-marker:hover {
+  transform: scale(1.35);
+}
+
+/* Coloured dot — background-color is set inline per category */
+.poi-marker-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 8px var(--poi-color, rgba(99,102,241,0.6)), 0 2px 4px rgba(0,0,0,0.4);
+  background-color: var(--poi-color, #6366f1);
+  z-index: 2;
+  transition: box-shadow 0.2s ease;
+}
+
+.poi-marker:hover .poi-marker-dot {
+  box-shadow: 0 0 14px var(--poi-color, rgba(99,102,241,0.9)), 0 2px 6px rgba(0,0,0,0.5);
+}
+
+/* Tooltip label that appears above the dot on hover */
+.poi-marker-label {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: rgba(14, 15, 22, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  color: #f1f5f9;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.poi-marker:hover .poi-marker-label {
+  opacity: 1;
+}
+
+/* Radius circle fill — overrides Leaflet defaults */
+.leaflet-interactive.poi-radius-circle {
+  cursor: default;
+}
