@@ -5,8 +5,10 @@ import RecordingStats from '../components/RecordingStats';
 import SaveRouteModal from '../components/SaveRouteModal';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { useTimer } from '../hooks/useTimer';
+import { usePoiDiscovery } from '../hooks/usePoiDiscovery';
 import { getPathDistance } from '../utils/haversine';
 import { supabase } from '../services/supabaseClient';
+import { POI_SEARCH_RADIUS_METERS } from '../poi/poiConstants';
 
 export default function TrackerView() {
   const {
@@ -28,6 +30,8 @@ export default function TrackerView() {
     stopTimer,
     resetTimer
   } = useTimer();
+
+  const { pois } = usePoiDiscovery({ currentLocation, isRecording });
 
   const [autoCenter, setAutoCenter] = useState(true);
   const [distance, setDistance] = useState(0);
@@ -230,6 +234,8 @@ export default function TrackerView() {
           currentLocation={currentLocation}
           interactive={true}
           autoCenter={autoCenter}
+          pois={pois}
+          poiRadiusMeters={POI_SEARCH_RADIUS_METERS}
         />
 
         {/* Floating Controls on Map */}
