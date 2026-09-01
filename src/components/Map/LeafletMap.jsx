@@ -110,7 +110,7 @@ export default function LeafletMap({
       >
         {/* CartoDB Dark Matter tiles (premium dark UI look) */}
         <TileLayer
-          url={`https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png${import.meta.env.CARTO_API_KEY ? `?key=${import.meta.env.CARTO_API_KEY}` : ''}`}
+          url={`https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png${(import.meta.env.CARTO_API_KEY || import.meta.env.VITE_CARTO_API_KEY) ? `?key=${import.meta.env.CARTO_API_KEY || import.meta.env.VITE_CARTO_API_KEY}` : ''}`}
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
         />
 
