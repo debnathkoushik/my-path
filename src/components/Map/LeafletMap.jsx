@@ -108,11 +108,25 @@ export default function LeafletMap({
         doubleClickZoom={interactive}
         scrollWheelZoom={interactive}
       >
-        {/* CartoDB Dark Matter tiles (premium dark UI look) */}
-        <TileLayer
-          url={`https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png${(import.meta.env.CARTO_API_KEY || import.meta.env.VITE_CARTO_API_KEY) ? `?key=${import.meta.env.CARTO_API_KEY || import.meta.env.VITE_CARTO_API_KEY}` : ''}`}
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        />
+        {/* TileLayer: Uses CARTO Dark Matter if API key is configured, falls back to OSM dark filter so watermarks never show */}
+        {(() => {
+          const cartoKey = import.meta.env.CARTO_API_KEY || import.meta.env.VITE_CARTO_API_KEY;
+          const tileUrl = cartoKey
+            ? `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?key=${cartoKey}`
+            : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+          const tileClass = cartoKey ? '' : 'dark-tiles-fallback';
+          const attribution = cartoKey
+            ? '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+            : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+          return (
+            <TileLayer
+              url={tileUrl}
+              className={tileClass}
+              attribution={attribution}
+            />
+          );
+        })()}
 
         {/* ChangeView runs during active tracking */}
         {interactive && autoCenter && currentLocation && (
