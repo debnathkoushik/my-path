@@ -112,7 +112,7 @@ export default function LeafletMap({
         {(() => {
           const cartoKey = import.meta.env.CARTO_API_KEY || import.meta.env.VITE_CARTO_API_KEY;
           const tileUrl = cartoKey
-            ? `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?key=${cartoKey}`
+            ? `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=${cartoKey}`
             : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
           const tileClass = cartoKey ? '' : 'dark-tiles-fallback';
           const attribution = cartoKey
