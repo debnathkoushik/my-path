@@ -109,7 +109,10 @@ Deno.serve(async (req) => {
   try {
     const resp = await fetch(OVERPASS_URL, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent':   'PathFinder-GPS/1.0 (https://github.com/debnathkoushik/my-path)',
+      },
       body:    `data=${encodeURIComponent(overpassQuery)}`,
     });
 
