@@ -6,7 +6,7 @@ import { isCacheEntryFresh, derivePOICategory } from './poiTypes.js';
 import {
   POI_SEARCH_RADIUS_METERS,
   POI_FETCH_THRESHOLD_RATIO,
-  POI_DEBOUNCE_MS,
+  POI_THROTTLE_INTERVAL_MS,
   POI_GEOHASH_PRECISION,
   POI_CACHE_TTL_SECONDS,
 } from './poiConstants.js';
@@ -15,12 +15,20 @@ import {
  * PoiDiscoveryService
  *
  * Orchestrates nearby-places discovery for the active tracking session.
- * Owns: distance-gate, debounce, cache reads via PoiCacheStore, SWR,
- * deduplication by OSM id, concurrent-revalidation guard, and offline fallback.
+ * Owns: distance-gate, leading+trailing edge throttle, cache reads via
+ * PoiCacheStore, SWR, deduplication by OSM id, concurrent-revalidation
+ * guard, and offline fallback.
+ *
+ * Throttle behaviour:
+ *   - Leading edge:  first qualifying trigger fires immediately.
+ *   - Cooldown:      subsequent triggers within 9s are suppressed but the
+ *                    most recent position is saved.
+ *   - Trailing edge: when the cooldown expires, if any trigger was suppressed,
+ *                    one final fetch fires with the latest suppressed position.
  *
  * Usage:
  *   const service = new PoiDiscoveryService();
- *   const pois = await service.onPositionUpdate(lat, lng);
+ *   const pois = service.onPositionUpdate(lat, lng);
  */
 export class PoiDiscoveryService {
   /** @type {SupabasePoiCacheStore} */
@@ -29,8 +37,15 @@ export class PoiDiscoveryService {
   /** @type {{ lat: number, lng: number } | null} */
   #lastFetchLocation = null;
 
-  /** @type {number | null} — setTimeout handle for debounce */
-  #debounceTimer = null;
+  /** @type {number | null} — setTimeout handle for throttle cooldown */
+  #throttleTimer = null;
+
+  /**
+   * The most recent position that was suppressed during a throttle cooldown.
+   * Used by the trailing edge to fire one final fetch when the cooldown expires.
+   * @type {{ lat: number, lng: number } | null}
+   */
+  #pendingTrailingPosition = null;
 
   /**
    * Guard: geohashes whose revalidation is currently in-flight.
@@ -57,7 +72,8 @@ export class PoiDiscoveryService {
   /**
    * Must be called on every position update from useGeolocation.
    * Returns the current deduplicated POI list immediately (from the in-memory
-   * map), and schedules a fetch cycle if the movement + debounce gate passes.
+   * map), and fires a fetch cycle via leading+trailing edge throttle if the
+   * movement gate is crossed.
    *
    * @param {number} lat
    * @param {number} lng
@@ -76,18 +92,16 @@ export class PoiDiscoveryService {
       ) >= thresholdMeters;
 
     if (shouldTrigger) {
-      // Clear any pending debounce and start a new one
-      if (this.#debounceTimer !== null) {
-        clearTimeout(this.#debounceTimer);
-      }
-
-      this.#debounceTimer = setTimeout(() => {
-        this.#debounceTimer = null;
-        // Run asynchronously — never blocks the caller
+      if (this.#throttleTimer === null) {
+        // ── Leading edge: no cooldown active → fire immediately ──────────
+        this.#startCooldown();
         this.#runFetchCycle(lat, lng).catch((err) => {
           console.warn('[PoiDiscoveryService] fetch cycle error (non-fatal):', err);
         });
-      }, POI_DEBOUNCE_MS);
+      } else {
+        // ── Inside cooldown: save position for trailing edge ─────────────
+        this.#pendingTrailingPosition = { lat, lng };
+      }
     }
 
     // Return immediately from in-memory state (may be empty on first load)
@@ -95,13 +109,35 @@ export class PoiDiscoveryService {
   }
 
   /**
+   * Starts the throttle cooldown window.
+   * When the cooldown expires, checks for a suppressed trailing-edge position
+   * and fires one final fetch cycle if present.
+   */
+  #startCooldown() {
+    this.#throttleTimer = setTimeout(() => {
+      this.#throttleTimer = null;
+
+      // ── Trailing edge: fire if any trigger was suppressed during cooldown
+      if (this.#pendingTrailingPosition) {
+        const { lat, lng } = this.#pendingTrailingPosition;
+        this.#pendingTrailingPosition = null;
+        this.#startCooldown(); // new cooldown for the trailing fire
+        this.#runFetchCycle(lat, lng).catch((err) => {
+          console.warn('[PoiDiscoveryService] fetch cycle error (non-fatal):', err);
+        });
+      }
+    }, POI_THROTTLE_INTERVAL_MS);
+  }
+
+  /**
    * Resets state when the user stops a recording session.
    */
   reset() {
-    if (this.#debounceTimer !== null) {
-      clearTimeout(this.#debounceTimer);
-      this.#debounceTimer = null;
+    if (this.#throttleTimer !== null) {
+      clearTimeout(this.#throttleTimer);
+      this.#throttleTimer = null;
     }
+    this.#pendingTrailingPosition = null;
     this.#lastFetchLocation = null;
     this.#poiMap.clear();
     this.#inFlightGeohashes.clear();
