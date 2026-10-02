@@ -1,7 +1,8 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { POI_CATEGORY_COLORS } from '../../poi/poiConstants.js';
+import { POI_THROTTLE_INTERVAL_MS } from '../../poi/poiConstants.js';
+import { renderThrottledPoiMarkers } from './renderThrottledPoiMarkers.jsx';
 
 // HTML element-based custom icon for the current user location dot (glowing pulse)
 const currentPositionIcon = L.divIcon({
@@ -40,28 +41,6 @@ const endPinIcon = L.divIcon({
   iconAnchor: [8, 8]
 });
 
-/**
- * Returns a Leaflet divIcon for a single POI marker.
- * The category colour is applied via a CSS custom property so the
- * hover glow in CSS always matches the dot fill.
- * @param {{ name: string, category: string }} poi
- * @returns {L.DivIcon}
- */
-function makePOIIcon(poi) {
-  const color = POI_CATEGORY_COLORS[poi.category] ?? POI_CATEGORY_COLORS.default;
-  return L.divIcon({
-    html: `
-      <div class="poi-marker" style="--poi-color: ${color}">
-        <div class="poi-marker-dot"></div>
-        <span class="poi-marker-label">${poi.name.replace(/</g, '&lt;')}</span>
-      </div>
-    `,
-    className: 'custom-leaflet-poi-marker',
-    iconSize:   [26, 26],
-    iconAnchor: [13, 13],
-  });
-}
-
 // Helper component to pan/zoom the map dynamically when props change
 function ChangeView({ center, zoom }) {
   const map = useMap();
@@ -94,6 +73,7 @@ export default function LeafletMap({
   autoCenter = true,
   pois = [],
   poiRadiusMeters = 500,
+  poiThrottleIntervalMs = POI_THROTTLE_INTERVAL_MS,
 }) {
   const defaultCenter = center || (currentLocation ? { lat: currentLocation.lat, lng: currentLocation.lng } : { lat: 0, lng: 0 });
 
@@ -200,14 +180,11 @@ export default function LeafletMap({
           />
         )}
 
-        {/* POI markers — active tracking only */}
-        {interactive && pois.map((poi) => (
-          <Marker
-            key={poi.id}
-            position={[poi.lat, poi.lng]}
-            icon={makePOIIcon(poi)}
-          />
-        ))}
+        {/* POI markers — rendered via 9s throttle logic */}
+        {renderThrottledPoiMarkers(pois, {
+          interactive,
+          intervalMs: poiThrottleIntervalMs,
+        })}
       </MapContainer>
     </div>
   );
