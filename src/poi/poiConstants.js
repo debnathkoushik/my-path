@@ -16,10 +16,13 @@ export const POI_SEARCH_RADIUS_METERS = 500;
 export const POI_FETCH_THRESHOLD_RATIO = 0.65;
 
 /**
- * Minimum milliseconds between fetch cycles, even if the distance threshold
- * is already crossed.  Absorbs GPS jitter.
+ * Minimum milliseconds between POI fetch cycles (throttle window).
+ * Uses leading + trailing edge throttle: the first qualifying trigger fires
+ * immediately, then a cooldown blocks further calls for this interval.
+ * When the cooldown expires, if any trigger was suppressed, one final
+ * trailing-edge fetch fires with the most recent suppressed position.
  */
-export const POI_DEBOUNCE_MS = 9_000; // 9 seconds
+export const POI_THROTTLE_INTERVAL_MS = 9_000; // 9 seconds
 
 /**
  * Geohash precision used for spatial bucketing of cache entries.
