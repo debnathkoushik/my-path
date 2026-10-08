@@ -41,18 +41,15 @@ graph LR
     end
 
     subgraph External["External Services"]
-        G[CARTO Basemaps]
-        H[OpenStreetMap Tiles]
-        I[Overpass API]
+        G[OpenStreetMap Tiles]
+        H[Overpass API]
     end
 
     A -- "REST via anon key" --> D
     A -- "invoke via anon key" --> E
-    E -- "HTTP POST" --> I
-    E -- "service_role upsert" --> F
+    E -- "HTTP POST" --> H
     D -- "SQL read/write" --> F
     A -- "tile requests" --> G
-    A -- "fallback tiles" --> H
     A -- "offline cache" --> C
     B -- "asset caching" --> A
 ```
@@ -69,9 +66,9 @@ graph LR
 | **Map Rendering** | Leaflet + react-leaflet | 1.9 / 5.0 | Interactive map, polylines, markers, circles |
 | **Icons** | lucide-react | 1.x | UI iconography |
 | **BaaS** | Supabase | 2.x | Auth-free PostgreSQL, Edge Functions, REST API |
-| **Database** | PostgreSQL (Supabase-hosted) | 15+ | Route persistence, POI cache |
-| **Edge Runtime** | Deno (Supabase Edge Functions) | — | Server-side POI fetching, cache writing |
-| **Basemap Tiles** | CARTO Dark Matter / OSM | — | Map background tiles |
+| **Database** | PostgreSQL (Supabase-hosted) | 15+ | Route persistence and geohash POI cache |
+| **Edge Runtime** | Deno (Supabase Edge Functions) | — | Server-side Overpass requests and cache writes |
+| **Basemap** | OpenStreetMap | — | Map tiles |
 | **POI Data** | Overpass API (OpenStreetMap) | — | Nearby places querying |
 | **Hosting** | Vercel | — | Static SPA hosting, CDN |
 | **CI/CD** | GitHub Actions | — | Migrations, Edge Function deploy, Vercel deploy |
@@ -122,12 +119,10 @@ graph TB
         pg[("PostgreSQL: routes + poi_cache")]
     end
 
-    subgraph Tiles["Tile Providers"]
-        carto["CARTO CDN"]
-        osm["OSM CDN"]
+    subgraph OSM["OpenStreetMap Services"]
+        tiles["OSM Tile Server"]
+        overpass["Overpass API"]
     end
-
-    overpass["Overpass API"]
 
     main --> app
     app -->|"hash = #/"| tv
@@ -145,7 +140,7 @@ graph TB
     ef -->|"HTTP POST"| overpass
     ef -->|"service_role upsert"| pg
     pgrest --> pg
-    lm --> carto & osm
+    tiles --> lm
     pds --> idb
 ```
 
@@ -158,7 +153,7 @@ graph TB
 | File | Role |
 |---|---|
 | `index.html` | HTML shell, PWA meta tags, viewport config |
-| `src/main.jsx` | React root, imports global CSS + Leaflet CSS |
+| `src/main.jsx` | React root and global CSS |
 | `src/App.jsx` | Hash-based router: `#/` leads to TrackerView, `#/path/:id` leads to SharedRouteView |
 
 ### 4.2 Views
@@ -172,7 +167,7 @@ graph TB
 
 | Component | File | Responsibility |
 |---|---|---|
-| **LeafletMap** | `src/components/Map/LeafletMap.jsx` | Renders Leaflet map with tile layer, polylines, GPS dot, start/end pins, POI markers, POI radius circle. Handles CARTO to OSM tile fallback. |
+| **LeafletMap** | `src/components/Map/LeafletMap.jsx` | Renders OpenStreetMap tiles, route polylines, GPS dot, start/end pins, POI markers, and POI radius circle. |
 | **RecordingStats** | `src/components/RecordingStats.jsx` | Displays duration, distance, average speed during active tracking |
 | **SaveRouteModal** | `src/components/SaveRouteModal.jsx` | Modal dialog for naming and saving a recorded route |
 | **ShareButton** | `src/components/ShareButton.jsx` | Native Web Share API with clipboard fallback |
@@ -198,14 +193,9 @@ graph TB
 |---|---|---|
 | `src/services/supabaseClient.js` | `supabase` | Singleton Supabase client initialized with `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` |
 
-### 4.7 Tile Layer Strategy
+### 4.7 Map Strategy
 
-```mermaid
-flowchart TD
-    A["LeafletMap renders"] --> B{"CARTO_API_KEY or VITE_CARTO_API_KEY present?"}
-    B -- Yes --> C["CARTO Dark Matter tiles via basemaps.cartocdn.com"]
-    B -- No --> D["OSM tiles with CSS dark filter via tile.openstreetmap.org"]
-```
+The app renders OpenStreetMap tiles through Leaflet and fetches POIs through the Overpass API from the Supabase Edge Function. No Google Maps key or map ID is required.
 
 ---
 
@@ -229,7 +219,7 @@ The front-end communicates with Supabase PostgreSQL through the auto-generated R
 | **Runtime** | Deno (Supabase Edge Functions) |
 | **Auth** | `--no-verify-jwt` (no auth required to invoke) |
 | **Input** | `{ geohash, lat, lng, radiusMeters, ttlSeconds }` |
-| **Steps** | 1. Build Overpass QL query, 2. POST to Overpass API, 3. Normalize results, 4. Upsert into `poi_cache` (service role), 5. Return `{ pois }` |
+| **Steps** | 1. Validate request, 2. Build Overpass QL, 3. POST to Overpass, 4. Normalize results, 5. Upsert `poi_cache` with service role, 6. Return `{ pois }` |
 
 ```mermaid
 sequenceDiagram
@@ -239,15 +229,15 @@ sequenceDiagram
     participant DB as PostgreSQL poi_cache
 
     Client->>EF: supabase.functions.invoke fetch-pois with body
-    EF->>OA: POST /api/interpreter with User-Agent PathFinder-GPS/1.0
+    EF->>OA: POST Overpass QL with application User-Agent
     OA-->>EF: elements array
-    EF->>EF: normalize elements into NormalizedPoi array
+    EF->>EF: normalize OSM elements into NormalizedPoi array
     EF->>DB: UPSERT poi_cache using service_role key
     DB-->>EF: OK
     EF-->>Client: pois NormalizedPoi array
 ```
 
-**Why the Edge Function exists**: The Overpass API requires a custom `User-Agent` header (without it, HTTP 406 is returned). Browser `fetch()` cannot set arbitrary `User-Agent` headers. The Edge Function also writes to `poi_cache` using the `service_role` key, which bypasses RLS — client code is intentionally blocked from writing to `poi_cache`.
+**Why the Edge Function exists**: Overpass requires a custom `User-Agent`, and cache writes must use the Supabase service-role key. Both remain server-side; clients only read cached geohash rows.
 
 ---
 
@@ -284,9 +274,9 @@ erDiagram
 
 **poi_cache** columns:
 - `geohash` — TEXT primary key, precision-6 geohash string
-- `fetched_at` — NOT NULL, timestamp of last Overpass fetch
-- `ttl_seconds` — NOT NULL, time-to-live (default 172800 = 2 days)
-- `pois` — NOT NULL, JSONB array of `NormalizedPoi` objects
+- `fetched_at` — timestamp of last Overpass fetch
+- `ttl_seconds` — row time-to-live (default 172800 seconds)
+- `pois` — normalized OSM POI array stored as JSONB
 
 ### 6.2 Row-Level Security (RLS)
 
@@ -295,7 +285,7 @@ erDiagram
 | `routes` | Allow public read access to routes | anon, authenticated | SELECT | `true` |
 | `routes` | Allow public insert access to routes | anon, authenticated | INSERT | `true` |
 | `poi_cache` | poi_cache_public_read | anon, authenticated | SELECT | `true` |
-| `poi_cache` | *(no client write policy)* | — | INSERT/UPDATE | **Blocked** — only `service_role` (Edge Function) can write |
+| `poi_cache` | *(no client write policy)* | — | INSERT/UPDATE | **Blocked** — only service-role Edge Function can write |
 
 ### 6.3 Migrations
 
@@ -310,10 +300,9 @@ erDiagram
 
 | Service | URL | Protocol | Purpose | Auth |
 |---|---|---|---|---|
-| **CARTO Basemaps** | `basemaps.cartocdn.com` | HTTPS tile GET | Dark Matter map tiles | API key as `?key=` query param |
-| **OpenStreetMap Tiles** | `tile.openstreetmap.org` | HTTPS tile GET | Fallback map tiles (CSS-filtered dark) | None |
-| **Overpass API** | `overpass-api.de/api/interpreter` | HTTPS POST | Querying OSM POI data within a radius | None (requires `User-Agent` header) |
-| **Supabase** | `*.supabase.co` | HTTPS | PostgREST + Edge Functions | Anon key (client), service_role key (Edge Function) |
+| **OpenStreetMap Tiles** | `tile.openstreetmap.org` | HTTPS tile GET | Map background tiles | None |
+| **Overpass API** | `overpass-api.de/api/interpreter` | HTTPS POST | Nearby OSM POI queries | None; server request includes User-Agent |
+| **Supabase** | `*.supabase.co` | HTTPS | PostgREST + Edge Functions | Publishable key (client), service-role key (Edge Function) |
 | **Vercel** | `vercel.com` | HTTPS | Static site hosting + CDN | Deploy token |
 
 ---
@@ -422,13 +411,13 @@ sequenceDiagram
     participant SB as Supabase PostgREST
     participant EF as Edge Function
     participant OA as Overpass API
-    participant DB as PostgreSQL
+    participant DB as PostgreSQL poi_cache
     participant IDB as IndexedDB
     participant LM as LeafletMap
 
     Note over Hook: On mount loadFromIndexedDB
     Hook->>PDS: loadFromIndexedDB()
-    PDS->>IDB: get pois
+    PDS->>IDB: get lastKnownPois
     IDB-->>PDS: cached NormalizedPoi array or empty
 
     GPS-->>TV: currentLocation update
@@ -437,51 +426,43 @@ sequenceDiagram
 
     PDS->>PDS: Distance gate: moved at least 325m?
     alt Below threshold
-        PDS-->>Hook: return currentPois no fetch
+        PDS-->>Hook: return current markers without request
     else Above threshold or first call
-        PDS->>PDS: Start 9s debounce timer
-        PDS-->>Hook: return currentPois immediate
+        PDS->>PDS: Start 9s leading/trailing throttle
+        PDS-->>Hook: return current markers immediately
     end
 
-    Note over PDS: 9s debounce expires
-
+    Note over PDS: Fetch cycle runs
     PDS->>Geo: encodeGeohash lat lng 6
-    Geo-->>PDS: centerHash
-    PDS->>Geo: getGeohashNeighbors centerHash
-    Geo-->>PDS: 8 neighbor hashes
-
-    PDS->>Store: getManyStaleOrFresh center plus 8 neighbors
-    Store->>SB: SELECT FROM poi_cache WHERE geohash IN list
-    SB->>DB: SQL query
-    DB-->>SB: rows
-    SB-->>Store: data
-    Store-->>PDS: Map of geohash to CachedPoiEntry
-
-    loop For each of 9 geohash cells
-        alt Cache miss no row
-            PDS->>EF: supabase.functions.invoke fetch-pois
-            EF->>OA: Overpass QL query
-            OA-->>EF: elements array
-            EF->>EF: normalize
-            EF->>DB: UPSERT poi_cache
-            EF-->>PDS: pois
-            PDS->>PDS: mergePois dedup by osmType/osmId
-        else Fresh cache hit
-            PDS->>PDS: mergePois with entry.pois
-        else Stale cache hit SWR
-            PDS->>PDS: mergePois with entry.pois serve stale immediately
-            PDS->>EF: Background revalidation fire-and-forget
-            EF->>OA: Overpass QL query
-            OA-->>EF: elements array
-            EF->>DB: UPSERT poi_cache
-            EF-->>PDS: pois
-            PDS->>PDS: mergePois update in-memory map
+    Geo-->>PDS: center geohash
+    PDS->>Geo: getGeohashNeighbors
+    Geo-->>PDS: eight neighbor hashes
+    PDS->>Store: getManyStaleOrFresh for nine cells
+    Store->>SB: SELECT poi_cache rows
+    SB->>DB: query by geohash
+    DB-->>PDS: cache entries
+    loop For each cell
+        alt Missing cache row
+            PDS->>EF: invoke fetch-pois
+            EF->>OA: POST Overpass QL
+            OA-->>EF: OSM elements
+            EF->>EF: normalize POIs
+            EF->>DB: upsert poi_cache
+            EF-->>PDS: fresh POIs
+            PDS->>Hook: publish updated POI snapshot
+        else Fresh cache row
+            PDS->>PDS: merge cached POIs
+        else Stale cache row
+            PDS->>PDS: serve stale POIs and start background refresh
+            PDS->>EF: invoke fetch-pois
+            EF->>OA: POST Overpass QL and refresh cache
+            EF-->>PDS: fresh POIs
+            PDS->>Hook: publish updated POI snapshot
         end
     end
-
-    PDS->>IDB: persistToIndexedDB pois fire-and-forget
+    PDS->>IDB: persist last-known OSM POIs
     Hook-->>TV: pois
-    TV->>LM: Render POI markers and 500m radius circle
+    TV->>LM: Render route and throttled markers on OSM tiles
 ```
 
 ### 10.2 Throttle and Gate Logic
@@ -489,25 +470,27 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     A["GPS position update"] --> B{"First call? lastFetchLocation is null"}
-    B -- Yes --> D["Start 9s debounce timer"]
+    B -- Yes --> D["Fetch immediately and start 9s cooldown"]
     B -- No --> C{"Moved at least 325m? 500m x 0.65"}
-    C -- No --> E["Return cached POIs, no network call"]
+    C -- No --> E["Return current in-memory POIs, no network call"]
     C -- Yes --> F{"Pending timer?"}
-    F -- Yes --> G["clearTimeout and restart 9s timer"]
+    F -- Yes --> G["Save latest position for trailing-edge fetch"]
     F -- No --> D
-    D --> H["9s elapses with no further movement beyond 325m"]
-    H --> I["runFetchCycle lat lng"]
+    D --> H["9s cooldown expires"]
+    G --> H
+    H --> I{"Pending trailing position?"}
+    I -- Yes --> J["Run fetch cycle at latest position"]
+    I -- No --> K["Wait for next movement threshold"]
 ```
 
 ### 10.3 POI Module Files
 
 | File | Class / Exports | Responsibility |
 |---|---|---|
-| `src/poi/poiConstants.js` | Constants | Radius (500m), threshold (0.65), debounce (9s), geohash precision (6), TTL (2 days), OSM tags, category colors |
-| `src/poi/poiTypes.js` | `isCacheEntryFresh()`, `derivePOICategory()` | JSDoc typedefs, TTL freshness check, OSM tag to category mapping |
-| `src/poi/PoiCacheStore.js` | *(interface only)* | JSDoc contract: `get()`, `getStaleOrFresh()`, `getManyStaleOrFresh()`, `set()` |
-| `src/poi/SupabasePoiCacheStore.js` | `SupabasePoiCacheStore` | Concrete adapter — reads from `poi_cache` table via Supabase client. `set()` throws (writes are Edge-Function-only). |
-| `src/poi/PoiDiscoveryService.js` | `PoiDiscoveryService` | Core orchestrator: distance gate, debounce, geohash bucketing, cache reads, SWR revalidation, in-flight guard, dedup map, IndexedDB mirror |
+| `src/poi/poiConstants.js` | Constants | Radius (500m), movement threshold (0.65), fetch throttle (9s), render throttle (3s), geohash precision, cache TTL, OSM tags, category colors |
+| `src/poi/poiTypes.js` | Cache and POI helpers | `NormalizedPoi`/`CachedPoiEntry` typedefs, TTL freshness check, OSM tag categories |
+| `src/poi/SupabasePoiCacheStore.js` | `SupabasePoiCacheStore` | Read-only client adapter for the Edge Function-owned geohash cache |
+| `src/poi/PoiDiscoveryService.js` | `PoiDiscoveryService` | Distance gate, fetch throttle, geohash cache reads, SWR updates, bounded OSM POI map, IndexedDB offline mirror |
 
 ---
 
@@ -550,7 +533,6 @@ graph TD
 
     SPCS --> sc
     SPCS --> pTypes
-
     sc --> supabaseJS["@supabase/supabase-js"]
     LM --> leaflet["leaflet"]
     LM --> reactLeaflet["react-leaflet"]
@@ -566,13 +548,13 @@ graph TD
 ```mermaid
 graph TD
     uPOI["usePoiDiscovery.js - React Hook"] --> PDS["PoiDiscoveryService.js - Orchestrator"]
-    PDS --> SPCS["SupabasePoiCacheStore.js - DB Adapter"]
+    PDS --> SPCS["SupabasePoiCacheStore.js - Cache Adapter"]
     PDS --> pTypes["poiTypes.js - Types and Helpers"]
     PDS --> pConst["poiConstants.js - Config"]
     PDS --> geo["geohash.js - Spatial Index"]
     PDS --> hav["haversine.js - Distance Calc"]
     PDS --> sc["supabaseClient.js - Edge Function Invoke"]
-    SPCS --> sc
+    SPCS --> sc["supabaseClient.js"]
     SPCS --> pTypes
     LM["LeafletMap.jsx - Rendering"] --> pConst
 
@@ -654,9 +636,6 @@ Set in `.env.local` (local dev) or injected by Vercel (production).
 |---|---|---|---|
 | `VITE_SUPABASE_URL` | `VITE_` | Yes | Supabase project URL |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | `VITE_` | Yes | Supabase anon/public key |
-| `CARTO_API_KEY` | `CARTO_` | No | CARTO basemap API key. If absent, falls back to dark-filtered OSM tiles. |
-
-> `vite.config.js` uses `envPrefix: ['VITE_', 'CARTO_']` so both prefixes are exposed to client code via `import.meta.env`.
 
 ### 13.2 Edge Function (Deno Runtime)
 
@@ -664,8 +643,8 @@ Automatically injected by Supabase.
 
 | Variable | Source | Purpose |
 |---|---|---|
-| `SUPABASE_URL` | Auto-injected | Used to create the admin Supabase client |
-| `SUPABASE_SERVICE_ROLE_KEY` | Auto-injected / Dashboard | Used for RLS-bypassing writes to `poi_cache` |
+| `SUPABASE_URL` | Auto-injected | Supabase project URL for the admin client |
+| `SUPABASE_SERVICE_ROLE_KEY` | Auto-injected / Dashboard | Writes normalized Overpass results to `poi_cache` |
 
 ### 13.3 CI/CD (GitHub Actions)
 
@@ -679,4 +658,3 @@ Automatically injected by Supabase.
 | `VERCEL_PROJECT_ID` | Var | `deploy-production` |
 | `VITE_SUPABASE_URL` | Var | `deploy-production` (build-time) |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Var | `deploy-production` (build-time) |
-| `CARTO_API_KEY` | Var | `deploy-production` (build-time) |

@@ -9,7 +9,7 @@
 export const POI_SEARCH_RADIUS_METERS = 500;
 
 /**
- * A new Overpass fetch cycle is triggered only when the user has moved at least
+ * A new POI fetch cycle is triggered only when the user has moved at least
  * this fraction of the search radius from the last fetch location.
  * Default 0.65 ensures successive search circles overlap by ~35%, avoiding gaps.
  */
@@ -24,23 +24,19 @@ export const POI_FETCH_THRESHOLD_RATIO = 0.65;
  */
 export const POI_THROTTLE_INTERVAL_MS = 9_000; // 9 seconds
 
+/** Marker updates are throttled separately so fresh data is shown promptly. */
+export const POI_RENDER_THROTTLE_INTERVAL_MS = 3_000;
+
 /**
- * Geohash precision used for spatial bucketing of cache entries.
- * Precision 6 ≈ 1.2 km × 0.6 km cells.
+ * Geohash precision used for spatial cache buckets.
+ * Precision 6 is approximately 1.2 km × 0.6 km cells.
  */
 export const POI_GEOHASH_PRECISION = 6;
 
-/**
- * Default Time-to-Live (seconds) stored per cache row.
- * 172 800 s = 2 days.  Adjust after real usage data is available.
- */
+/** Default two-day time-to-live stored per POI cache row. */
 export const POI_CACHE_TTL_SECONDS = 172_800;
 
-/**
- * OSM tag filters for the Overpass query.
- * Entries are passed verbatim into Overpass QL `node[...]` filters.
- * Treat as a curated list — do not query the full OSM tag universe.
- */
+/** Curated OSM tag filters mirrored by the Overpass Edge Function. */
 export const POI_OSM_TAGS = [
   'tourism',
   'historic',
@@ -51,7 +47,7 @@ export const POI_OSM_TAGS = [
 
 /**
  * Category → display colour mapping for POI markers on the map.
- * Colours are chosen to stand out on the dark CartoDB basemap.
+ * Colours are chosen to stand out on the dark-filtered OpenStreetMap tiles.
  */
 export const POI_CATEGORY_COLORS = {
   tourism:    '#f59e0b', // amber
