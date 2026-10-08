@@ -17,18 +17,24 @@ import { PoiDiscoveryService } from '../poi/PoiDiscoveryService.js';
  */
 export function usePoiDiscovery({ currentLocation, isRecording }) {
   const [pois,      setPois]      = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [error,     setError]     = useState(null);
+  const isLoading = false;
 
   // Keep a stable service instance across renders
   const serviceRef = useRef(null);
-  if (!serviceRef.current) {
+  if (serviceRef.current == null) {
     serviceRef.current = new PoiDiscoveryService();
   }
 
   // Pre-populate from IndexedDB on first mount (offline resilience)
   useEffect(() => {
-    serviceRef.current.loadFromIndexedDB().catch(() => {/* non-fatal */});
+    const service = serviceRef.current;
+    const unsubscribe = service.onPoisUpdated((updatedPois) => {
+      setPois(updatedPois);
+      setError(null);
+    });
+    service.loadFromIndexedDB().catch(() => {/* non-fatal */});
+    return unsubscribe;
   }, []);
 
   // Drive the service on every position update, but only while recording
@@ -36,8 +42,6 @@ export function usePoiDiscovery({ currentLocation, isRecording }) {
     if (!isRecording || !currentLocation) return;
 
     const service = serviceRef.current;
-    setIsLoading(true);
-    setError(null);
 
     try {
       // onPositionUpdate is synchronous — it returns the current in-memory POI
@@ -46,9 +50,7 @@ export function usePoiDiscovery({ currentLocation, isRecording }) {
       setPois(snapshot);
     } catch (err) {
       console.error('[usePoiDiscovery] unexpected error:', err);
-      setError('Could not load nearby places.');
-    } finally {
-      setIsLoading(false);
+      queueMicrotask(() => setError('Could not load nearby places.'));
     }
   }, [currentLocation, isRecording]);
 
@@ -56,10 +58,12 @@ export function usePoiDiscovery({ currentLocation, isRecording }) {
   useEffect(() => {
     if (!isRecording) {
       serviceRef.current.reset();
-      setPois([]);
-      setError(null);
     }
   }, [isRecording]);
 
-  return { pois, isLoading, error };
+  return {
+    pois: isRecording ? pois : [],
+    isLoading,
+    error: isRecording ? error : null,
+  };
 }

@@ -2,7 +2,7 @@ import { supabase } from '../services/supabaseClient.js';
 import { encodeGeohash, getGeohashNeighbors } from '../utils/geohash.js';
 import { getDistance } from '../utils/haversine.js';
 import { SupabasePoiCacheStore } from './SupabasePoiCacheStore.js';
-import { isCacheEntryFresh, derivePOICategory } from './poiTypes.js';
+import { isCacheEntryFresh } from './poiTypes.js';
 import {
   POI_SEARCH_RADIUS_METERS,
   POI_FETCH_THRESHOLD_RATIO,
@@ -15,9 +15,8 @@ import {
  * PoiDiscoveryService
  *
  * Orchestrates nearby-places discovery for the active tracking session.
- * Owns: distance-gate, leading+trailing edge throttle, cache reads via
- * PoiCacheStore, SWR, deduplication by OSM id, concurrent-revalidation
- * guard, and offline fallback.
+ * Owns: distance-gate, leading+trailing edge throttle, geohash cache reads,
+ * stale-while-revalidate, OSM ID deduplication, and offline fallback.
  *
  * Throttle behaviour:
  *   - Leading edge:  first qualifying trigger fires immediately.
@@ -47,15 +46,11 @@ export class PoiDiscoveryService {
    */
   #pendingTrailingPosition = null;
 
-  /**
-   * Guard: geohashes whose revalidation is currently in-flight.
-   * Prevents duplicate concurrent Overpass calls for the same cell.
-   * @type {Set<string>}
-   */
+  /** @type {Set<string>} */
   #inFlightGeohashes = new Set();
 
   /**
-   * Deduplicated POI store: OSM composite id → NormalizedPoi.
+    * Deduplicated POI store: OSM composite ID → NormalizedPoi.
    * @type {Map<string, import('./poiTypes.js').NormalizedPoi>}
    */
   #poiMap = new Map();
@@ -66,6 +61,15 @@ export class PoiDiscoveryService {
    * @type {import('./poiTypes.js').NormalizedPoi[]}
    */
   #lastKnownPois = [];
+
+  /** @type {Set<(pois: import('./poiTypes.js').NormalizedPoi[]) => void>} */
+  #listeners = new Set();
+
+  #providerBackoffUntil = 0;
+  #providerBackoffMs = 0;
+  #sessionVersion = 0;
+
+  static #MAX_POIS = 300;
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -108,6 +112,28 @@ export class PoiDiscoveryService {
     return this.#currentPois();
   }
 
+  /** @param {(pois: import('./poiTypes.js').NormalizedPoi[]) => void} listener */
+  onPoisUpdated(listener) {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  #publishPois() {
+    const pois = this.#currentPois();
+    for (const listener of this.#listeners) {
+      try {
+        listener(pois);
+      } catch (err) {
+        console.warn('[PoiDiscoveryService] POI listener failed:', err);
+      }
+    }
+  }
+
+  #increaseProviderBackoff() {
+    this.#providerBackoffMs = Math.min(this.#providerBackoffMs ? this.#providerBackoffMs * 2 : 9_000, 60_000);
+    this.#providerBackoffUntil = Date.now() + this.#providerBackoffMs;
+  }
+
   /**
    * Starts the throttle cooldown window.
    * When the cooldown expires, checks for a suppressed trailing-edge position
@@ -133,144 +159,144 @@ export class PoiDiscoveryService {
    * Resets state when the user stops a recording session.
    */
   reset() {
+    this.#sessionVersion += 1;
+    const offlinePois = this.#currentPois()
+      .filter((poi) => /^(node|way|relation)\//.test(poi?.id ?? ''));
     if (this.#throttleTimer !== null) {
       clearTimeout(this.#throttleTimer);
       this.#throttleTimer = null;
     }
     this.#pendingTrailingPosition = null;
     this.#lastFetchLocation = null;
-    this.#poiMap.clear();
+    this.#lastKnownPois = offlinePois;
+    this.#mergePois(offlinePois);
     this.#inFlightGeohashes.clear();
+    this.#providerBackoffUntil = 0;
+    this.#providerBackoffMs = 0;
+    this.#publishPois();
   }
 
   // ── Private methods ──────────────────────────────────────────────────────
 
   /**
-   * Main fetch cycle: reads from the cache (current cell + 8 neighbors),
-   * merges fresh POIs into the dedup map, and triggers background SWR
-   * revalidation for stale cells.
+  * Reads the center cell and eight neighbors, serving cached data immediately
+  * and refreshing stale/missing entries through the Edge Function.
    * @param {number} lat
    * @param {number} lng
    */
   async #runFetchCycle(lat, lng) {
+    const sessionVersion = this.#sessionVersion;
     this.#lastFetchLocation = { lat, lng };
-
     const centerHash = encodeGeohash(lat, lng, POI_GEOHASH_PRECISION);
-    const neighborHashes = getGeohashNeighbors(centerHash);
-    const allHashes = [centerHash, ...neighborHashes];
+    const allHashes = [centerHash, ...getGeohashNeighbors(centerHash)];
 
     let cacheMap;
     try {
       cacheMap = await this.#store.getManyStaleOrFresh(allHashes);
     } catch (err) {
       console.warn('[PoiDiscoveryService] cache read failed, using offline fallback:', err);
-      // Fail gracefully — don't touch the existing poiMap, just return
       return;
     }
 
-    for (const hash of allHashes) {
-      const entry = cacheMap.get(hash);
+    if (sessionVersion !== this.#sessionVersion) return;
 
-      if (!entry) {
-        // Complete cache miss — fetch immediately (await so caller gets fresh data)
-        await this.#revalidateCell(hash, lat, lng);
-      } else {
-        // Merge whatever we have (fresh or stale) into the dedup map right away
+    for (const geohash of allHashes) {
+      const entry = cacheMap.get(geohash);
+      if (entry) {
         this.#mergePois(entry.pois);
-
         if (!isCacheEntryFresh(entry)) {
-          // Stale-while-revalidate: fire background refresh, do NOT await
-          this.#revalidateCellBackground(hash, lat, lng);
+          this.#fetchNearbyPois(geohash, lat, lng, sessionVersion).catch(() => {});
         }
+      } else {
+        await this.#fetchNearbyPois(geohash, lat, lng, sessionVersion);
+        if (sessionVersion !== this.#sessionVersion) return;
       }
     }
 
-    // Persist last-known POIs for offline fallback
     this.#lastKnownPois = this.#currentPois();
-
-    // Persist to IndexedDB for deeper offline resilience (fire-and-forget)
+    this.#publishPois();
     this.#persistToIndexedDB(this.#lastKnownPois).catch(() => {/* non-fatal */});
   }
 
   /**
-   * Awaited revalidation — used for cache misses where we want fresh data now.
+  * Performs one fresh provider lookup for the active geohash.
    * @param {string} geohash
    * @param {number} lat
    * @param {number} lng
    */
-  async #revalidateCell(geohash, lat, lng) {
-    if (this.#inFlightGeohashes.has(geohash)) return;
+  async #fetchNearbyPois(geohash, lat, lng, sessionVersion) {
+    if (this.#inFlightGeohashes.has(geohash)) return false;
     this.#inFlightGeohashes.add(geohash);
 
     try {
       const pois = await this.#callEdgeFunction(geohash, lat, lng);
+      if (sessionVersion !== this.#sessionVersion || !Array.isArray(pois)) return false;
       this.#mergePois(pois);
       this.#lastKnownPois = this.#currentPois();
+      this.#publishPois();
+      this.#persistToIndexedDB(this.#lastKnownPois).catch(() => {/* non-fatal */});
+      return true;
     } catch (err) {
-      console.warn(`[PoiDiscoveryService] revalidateCell failed for ${geohash}:`, err);
+      console.warn(`[PoiDiscoveryService] nearby lookup failed for ${geohash}:`, err);
+      return false;
     } finally {
-      this.#inFlightGeohashes.delete(geohash);
+      if (sessionVersion === this.#sessionVersion) {
+        this.#inFlightGeohashes.delete(geohash);
+      }
     }
   }
 
   /**
-   * Fire-and-forget revalidation for stale-while-revalidate.
-   * Updates the cache row in the background; updates the in-memory map
-   * when the response arrives.
-   * @param {string} geohash
-   * @param {number} lat
-   * @param {number} lng
-   */
-  #revalidateCellBackground(geohash, lat, lng) {
-    if (this.#inFlightGeohashes.has(geohash)) return;
-    this.#inFlightGeohashes.add(geohash);
-
-    this.#callEdgeFunction(geohash, lat, lng)
-      .then((pois) => {
-        this.#mergePois(pois);
-        this.#lastKnownPois = this.#currentPois();
-      })
-      .catch((err) => {
-        console.warn(`[PoiDiscoveryService] background revalidation failed for ${geohash}:`, err);
-      })
-      .finally(() => {
-        this.#inFlightGeohashes.delete(geohash);
-      });
-  }
-
-  /**
    * Calls the `fetch-pois` Supabase Edge Function.
-   * The Edge Function fetches Overpass and writes to poi_cache via service role.
+    * The Edge Function fetches Overpass and writes the result to poi_cache.
    * @param {string} geohash
    * @param {number} lat
    * @param {number} lng
-   * @returns {Promise<import('./poiTypes.js').NormalizedPoi[]>}
+   * @returns {Promise<import('./poiTypes.js').NormalizedPoi[] | null>}
    */
   async #callEdgeFunction(geohash, lat, lng) {
-    const { data, error } = await supabase.functions.invoke('fetch-pois', {
-      body: {
-        geohash,
-        lat,
-        lng,
-        radiusMeters: POI_SEARCH_RADIUS_METERS,
-        ttlSeconds:   POI_CACHE_TTL_SECONDS,
-      },
-    });
+    if (Date.now() < this.#providerBackoffUntil) return null;
 
-    if (error) throw new Error(error.message);
+    let data;
+    try {
+      const result = await supabase.functions.invoke('fetch-pois', {
+        body: {
+          geohash,
+          lat,
+          lng,
+          radiusMeters: POI_SEARCH_RADIUS_METERS,
+          ttlSeconds: POI_CACHE_TTL_SECONDS,
+        },
+      });
+      if (result.error) throw new Error(result.error.message);
+      data = result.data;
+    } catch (err) {
+      this.#increaseProviderBackoff();
+      throw err;
+    }
+
+    if (data?.error === 'PROVIDER_UNAVAILABLE') {
+      this.#increaseProviderBackoff();
+      return null;
+    }
+
+    this.#providerBackoffMs = 0;
+    this.#providerBackoffUntil = 0;
     return Array.isArray(data?.pois) ? data.pois : [];
   }
 
   /**
    * Merges a POI array into the internal dedup map.
-   * Keyed by "<osmType>/<osmId>" — duplicate entries are silently skipped.
+  * Keyed by provider id; repeated results refresh their position in the bounded map.
    * @param {import('./poiTypes.js').NormalizedPoi[]} pois
    */
   #mergePois(pois) {
     for (const poi of pois) {
-      if (!this.#poiMap.has(poi.id)) {
-        this.#poiMap.set(poi.id, poi);
-      }
+      if (!poi?.id || !/^(node|way|relation)\//.test(poi.id)) continue;
+      if (!this.#poiMap.has(poi.id)) this.#poiMap.set(poi.id, poi);
+    }
+    while (this.#poiMap.size > PoiDiscoveryService.#MAX_POIS) {
+      this.#poiMap.delete(this.#poiMap.keys().next().value);
     }
   }
 
@@ -307,11 +333,13 @@ export class PoiDiscoveryService {
   /** @returns {Promise<IDBDatabase>} */
   #openIDB() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open(PoiDiscoveryService.#IDB_DB_NAME, 1);
+      const req = indexedDB.open(PoiDiscoveryService.#IDB_DB_NAME, 3);
       req.onupgradeneeded = (e) => {
         const db = e.target.result;
         if (!db.objectStoreNames.contains(PoiDiscoveryService.#IDB_STORE_NAME)) {
           db.createObjectStore(PoiDiscoveryService.#IDB_STORE_NAME);
+        } else {
+          e.target.transaction.objectStore(PoiDiscoveryService.#IDB_STORE_NAME).clear();
         }
       };
       req.onsuccess = (e) => resolve(e.target.result);
@@ -334,10 +362,20 @@ export class PoiDiscoveryService {
         req.onsuccess = () => resolve(req.result ?? []);
         req.onerror   = () => reject(req.error);
       });
-      if (Array.isArray(pois)) {
-        this.#lastKnownPois = pois;
-        this.#mergePois(pois);
+
+      if (
+        !Array.isArray(pois)
+      ) {
+        const tx = db.transaction(PoiDiscoveryService.#IDB_STORE_NAME, 'readwrite');
+        tx.objectStore(PoiDiscoveryService.#IDB_STORE_NAME).delete(PoiDiscoveryService.#IDB_KEY);
+        return;
       }
+
+      const cachedPois = pois
+        .filter((poi) => /^(node|way|relation)\//.test(poi?.id ?? ''));
+      this.#lastKnownPois = cachedPois;
+      this.#mergePois(cachedPois);
+      this.#publishPois();
     } catch {
       // Non-fatal — IndexedDB may be unavailable in some browser contexts
     }

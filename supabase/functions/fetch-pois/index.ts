@@ -11,14 +11,11 @@
 // Deploy with:
 //   supabase functions deploy fetch-pois
 //
-// Required secret (set in Supabase dashboard → Project Settings → Edge Functions):
 //   SUPABASE_SERVICE_ROLE_KEY
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
-
-// Curated tag set — mirrors POI_OSM_TAGS in poiConstants.js
 const OSM_TAG_FILTERS = [
   'node["tourism"](around:{radius},{lat},{lng});',
   'node["historic"](around:{radius},{lat},{lng});',
@@ -27,28 +24,40 @@ const OSM_TAG_FILTERS = [
   'node["amenity"="restaurant"](around:{radius},{lat},{lng});',
 ];
 
-/** @param {Record<string,string>} tags */
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
+
+/** @param {Record<string, string>} tags */
 function deriveCategory(tags) {
-  if (tags.amenity === 'cafe')        return 'cafe';
-  if (tags.amenity === 'restaurant')  return 'restaurant';
-  if (tags.leisure === 'park')        return 'park';
-  if (tags.historic)                  return 'historic';
-  if (tags.tourism)                   return 'tourism';
+  if (tags.amenity === 'cafe') return 'cafe';
+  if (tags.amenity === 'restaurant') return 'restaurant';
+  if (tags.leisure === 'park') return 'park';
+  if (tags.historic) return 'historic';
+  if (tags.tourism) return 'tourism';
   return 'default';
 }
 
 /**
  * Normalizes a raw Overpass element into a NormalizedPoi.
- * @param {{ type: string, id: number, lat?: number, lon?: number, center?: { lat: number, lon: number }, tags: Record<string,string> }} el
+ * @param {{ type: string, id: number, lat?: number, lon?: number, center?: { lat: number, lon: number }, tags?: Record<string, string> }} el
  */
 function normalize(el) {
   const lat = el.lat ?? el.center?.lat;
   const lng = el.lon ?? el.center?.lon;
-  if (lat === undefined || lng === undefined) return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
-  const tags     = el.tags ?? {};
+  const tags = el.tags ?? {};
   const category = deriveCategory(tags);
-  const name     = tags.name || tags['name:en'] || category;
 
   return {
     id:      `${el.type}/${el.id}`,
@@ -56,7 +65,7 @@ function normalize(el) {
     osmType: el.type,
     lat,
     lng,
-    name,
+    name: tags.name || tags['name:en'] || category,
     category,
     tags,
   };
@@ -67,8 +76,7 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {
-        'Access-Control-Allow-Origin':  '*',
-        'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+        ...corsHeaders,
       },
     });
   }
@@ -77,21 +85,30 @@ Deno.serve(async (req) => {
   try {
     body = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), { status: 400 });
+    return jsonResponse({ error: 'Invalid JSON body' }, 400);
+  }
+
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return jsonResponse({ error: 'Request body must be a JSON object' }, 400);
   }
 
   const { geohash, lat, lng, radiusMeters = 500, ttlSeconds = 172800 } = body;
 
-  if (!geohash || lat == null || lng == null) {
-    return new Response(JSON.stringify({ error: 'Missing required fields: geohash, lat, lng' }), { status: 400 });
+  if (
+    typeof geohash !== 'string' || !geohash.trim() ||
+    !Number.isFinite(lat) || lat < -90 || lat > 90 ||
+    !Number.isFinite(lng) || lng < -180 || lng > 180 ||
+    !Number.isFinite(radiusMeters) || radiusMeters <= 0 || radiusMeters > 50_000 ||
+    !Number.isFinite(ttlSeconds) || ttlSeconds <= 0
+  ) {
+    return jsonResponse({ error: 'Invalid geohash, coordinates, radiusMeters, or ttlSeconds' }, 400);
   }
 
-  // ── 1. Build Overpass QL query ────────────────────────────────────────────
-  const filledFilters = OSM_TAG_FILTERS.map((f) =>
-    f
-      .replace('{radius}', radiusMeters)
-      .replace('{lat}',    lat)
-      .replace('{lng}',    lng)
+  const filledFilters = OSM_TAG_FILTERS.map((filter) =>
+    filter
+      .replace('{radius}', String(radiusMeters))
+      .replace('{lat}', String(lat))
+      .replace('{lng}', String(lng))
   ).join('\n');
 
   const overpassQuery = `
@@ -104,16 +121,16 @@ Deno.serve(async (req) => {
     out skel qt;
   `.trim();
 
-  // ── 2. Fetch from Overpass ────────────────────────────────────────────────
+  // ── 1. Fetch from Overpass ─────────────────────────────────────────────────
   let elements;
   try {
     const resp = await fetch(OVERPASS_URL, {
-      method:  'POST',
+      method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent':   'PathFinder-GPS/1.0 (https://github.com/debnathkoushik/my-path)',
+        'User-Agent': 'PathFinder-GPS/1.0 (https://github.com/debnathkoushik/my-path)',
       },
-      body:    `data=${encodeURIComponent(overpassQuery)}`,
+      body: `data=${encodeURIComponent(overpassQuery)}`,
     });
 
     if (!resp.ok) {
@@ -121,44 +138,41 @@ Deno.serve(async (req) => {
     }
 
     const json = await resp.json();
-    elements = json.elements ?? [];
+    elements = Array.isArray(json.elements) ? json.elements : [];
   } catch (err) {
     console.error('[fetch-pois] Overpass fetch failed:', err);
-    return new Response(JSON.stringify({ error: 'Overpass query failed', detail: err.message }), { status: 502 });
+    return jsonResponse({ error: 'Overpass query failed' }, 502);
   }
 
-  // ── 3. Normalize ──────────────────────────────────────────────────────────
+  // ── 2. Normalize ──────────────────────────────────────────────────────────
   const pois = elements
     .map(normalize)
     .filter(Boolean);
 
-  // ── 4. Upsert into poi_cache via service role ─────────────────────────────
-  const supabaseUrl    = Deno.env.get('SUPABASE_URL') ?? '';
+  // ── 3. Upsert into poi_cache via service role ─────────────────────────────
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SERVICE_ROLE_KEY') || '';
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    console.error('[fetch-pois] Supabase cache credentials are not configured');
+    return jsonResponse({ pois, degraded: true, error: 'CACHE_UNAVAILABLE' });
+  }
 
   const adminClient = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false },
   });
-
   const { error: upsertError } = await adminClient
     .from('poi_cache')
     .upsert({
       geohash,
-      fetched_at:  new Date().toISOString(),
+      fetched_at: new Date().toISOString(),
       ttl_seconds: ttlSeconds,
       pois,
     }, { onConflict: 'geohash' });
 
   if (upsertError) {
-    // Non-fatal: log and still return the POIs so the client isn't blocked
     console.error('[fetch-pois] Cache upsert failed:', upsertError.message);
   }
 
-  // ── 5. Return normalized POIs ─────────────────────────────────────────────
-  return new Response(JSON.stringify({ pois }), {
-    headers: {
-      'Content-Type':                'application/json',
-      'Access-Control-Allow-Origin': '*',
-    },
-  });
+  return jsonResponse({ pois });
 });

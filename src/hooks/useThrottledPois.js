@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { POI_THROTTLE_INTERVAL_MS } from '../poi/poiConstants.js';
+import { POI_RENDER_THROTTLE_INTERVAL_MS } from '../poi/poiConstants.js';
 
 /**
  * Compares two lists of POIs by length and ID to avoid unnecessary re-renders.
@@ -10,10 +10,9 @@ import { POI_THROTTLE_INTERVAL_MS } from '../poi/poiConstants.js';
 export function arePoisEqual(a = [], b = []) {
   if (a === b) return true;
   if (!a || !b || a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i]?.id !== b[i]?.id) return false;
-  }
-  return true;
+  const aIds = new Set(a.map((poi) => poi?.id));
+  const bIds = new Set(b.map((poi) => poi?.id));
+  return aIds.size === bIds.size && [...aIds].every((id) => bIds.has(id));
 }
 
 /**
@@ -21,17 +20,17 @@ export function arePoisEqual(a = [], b = []) {
  *
  * Throttle Behavior:
  *  - Leading Edge: The initial batch of POIs is immediately passed to the renderer.
- *  - Cooldown Window: For 9 seconds (`intervalMs`), incoming POIs are buffered instead
+ *  - Cooldown Window: For 3 seconds (`intervalMs`), incoming POIs are buffered instead
  *    of triggering map re-renders.
  *  - Trailing Edge: When the cooldown expires, if new POIs were buffered, they are flushed
  *    to trigger a single synchronized re-render, and a new cooldown window begins.
  *  - Immediate Reset: When pois is empty or tracking stops, state resets immediately.
  *
  * @param {Array<import('../poi/poiTypes.js').NormalizedPoi>} pois - The raw POI stream
- * @param {number} [intervalMs=POI_THROTTLE_INTERVAL_MS] - Throttle interval in milliseconds (default: 9000)
+ * @param {number} [intervalMs=POI_RENDER_THROTTLE_INTERVAL_MS] - Render throttle interval in milliseconds
  * @returns {Array<import('../poi/poiTypes.js').NormalizedPoi>} The throttled POI list to display
  */
-export function useThrottledPois(pois = [], intervalMs = POI_THROTTLE_INTERVAL_MS) {
+export function useThrottledPois(pois = [], intervalMs = POI_RENDER_THROTTLE_INTERVAL_MS) {
   const safePois = useMemo(() => (!pois || pois.length === 0 ? [] : pois), [pois]);
   const [renderedPois, setRenderedPois] = useState(safePois);
   const throttleTimerRef = useRef(null);

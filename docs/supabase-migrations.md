@@ -25,6 +25,8 @@ Create these as GitHub Actions variables in the `production` environment:
 - `VITE_SUPABASE_URL`: Production Supabase URL injected into the Vite build.
 - `VITE_SUPABASE_PUBLISHABLE_KEY`: Production Supabase publishable key injected into the Vite build.
 
+POI discovery uses the public Overpass API through the Supabase Edge Function. The Overpass query itself requires no API key; the Edge Function uses Supabase's service-role key only to write geohash results to `poi_cache`.
+
 `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` are browser-exposed Vite build variables. They are not private once deployed, but they still must be configured in GitHub Actions because the production build runs in the GitHub runner before the prebuilt output is uploaded to Vercel.
 
 ## Production Flow
