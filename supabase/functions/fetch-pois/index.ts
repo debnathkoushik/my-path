@@ -15,7 +15,11 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const OVERPASS_ENDPOINTS = [
+  'https://lz4.overpass-api.de/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
 const OSM_TAG_FILTERS = [
   'node["tourism"](around:{radius},{lat},{lng});',
   'node["historic"](around:{radius},{lat},{lng});',
@@ -121,26 +125,36 @@ Deno.serve(async (req) => {
     out skel qt;
   `.trim();
 
-  // ── 1. Fetch from Overpass ─────────────────────────────────────────────────
-  let elements;
-  try {
-    const resp = await fetch(OVERPASS_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'PathFinder-GPS/1.0 (https://github.com/debnathkoushik/my-path)',
-      },
-      body: `data=${encodeURIComponent(overpassQuery)}`,
-    });
+  // ── 1. Fetch from Overpass (multi-endpoint fallback) ──────────────────────
+  let elements = null;
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'PathFinder-GPS/1.0 (https://github.com/debnathkoushik/my-path)',
+        },
+        body: `data=${encodeURIComponent(overpassQuery)}`,
+        signal: AbortSignal.timeout(10_000),
+      });
 
-    if (!resp.ok) {
-      throw new Error(`Overpass responded with HTTP ${resp.status}`);
+      if (!resp.ok) {
+        throw new Error(`Endpoint ${endpoint} responded with HTTP ${resp.status}`);
+      }
+
+      const json = await resp.json();
+      if (Array.isArray(json?.elements)) {
+        elements = json.elements;
+        break;
+      }
+    } catch (err) {
+      console.warn(`[fetch-pois] Failed to fetch from ${endpoint}:`, err);
     }
+  }
 
-    const json = await resp.json();
-    elements = Array.isArray(json.elements) ? json.elements : [];
-  } catch (err) {
-    console.error('[fetch-pois] Overpass fetch failed:', err);
+  if (elements === null) {
+    console.error('[fetch-pois] All Overpass endpoints failed');
     return jsonResponse({ error: 'Overpass query failed' }, 502);
   }
 
